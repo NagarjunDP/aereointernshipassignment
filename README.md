@@ -1,67 +1,66 @@
 # Bulk Certificate Generator
 
-A backend API and web application for generating bulk PDF certificates from course and recipient data.
-Built using Python, FastAPI, SQLAlchemy 2.0, and ReportLab.
-Designed with simple and readable code for technical review.
+![Web Dashboard](docs/screenshot.png)
+
+A backend API and web dashboard for generating bulk PDF certificates from course and recipient data.
+Built with Python, FastAPI, SQLAlchemy 2.0, and ReportLab.
 
 ## Features
 
-- Asynchronous background processing for bulk certificate requests.
-- Individual per-recipient validation so valid records succeed even if some entries fail.
-- Isolated PDF generation per recipient ensuring one error never halts the batch.
-- ReportLab PDF generator using a single predefined landscape A4 template.
-- Live job progress tracking and status monitoring endpoints.
-- Single PDF downloads, batch ZIP download, and certificate verification by unique code.
-- Static single-page dashboard for manual input and CSV upload.
+- Accepts a bulk list of recipients and generates PDF certificates in the background.
+- Validates each recipient individually — valid entries succeed even if others fail.
+- Each certificate is generated in its own try/except so one error never stops the rest.
+- Single predefined landscape A4 template drawn in code with ReportLab.
+- Live progress tracking via polling endpoint.
+- Download certificates individually (PDF), in bulk (ZIP), or verify by unique code.
+- Static single-page dashboard for manual entry and CSV upload.
 
 ## Tech Stack
 
-- Python 3.14 / 3.10+
+- Python 3.10+
 - FastAPI
 - Uvicorn
 - SQLAlchemy 2.0
 - Pydantic v2
 - ReportLab
-- Pytest
-- HTTPX
+- Pytest + HTTPX
 
 ## Setup
 
-1. Clone the repository and navigate to the root directory:
+1. Clone and enter the repository:
    ```bash
-   cd aereo
+   git clone https://github.com/NagarjunDP/aereointernshipassignment.git
+   cd aereointernshipassignment
    ```
 
 2. Create and activate a virtual environment:
-   - On macOS/Linux:
+   - macOS / Linux:
      ```bash
      python3 -m venv .venv
      source .venv/bin/activate
      ```
-   - On Windows:
+   - Windows:
      ```cmd
      python -m venv .venv
      .venv\Scripts\activate
      ```
 
-3. Install requirements:
+3. Install dependencies:
    ```bash
    pip install -r requirements.txt
    ```
 
 ## Run the Application
 
-Start the Uvicorn development server:
 ```bash
 uvicorn app.main:app --reload
 ```
 
-- Web Dashboard: http://127.0.0.1:8000/
-- API Documentation (Swagger UI): http://127.0.0.1:8000/docs
+- Web dashboard: http://127.0.0.1:8000/
+- Swagger API docs: http://127.0.0.1:8000/docs
 
 ## Run Tests
 
-Run the test suite using pytest:
 ```bash
 pytest
 ```
@@ -70,19 +69,44 @@ pytest
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| POST | `/api/v1/jobs` | Submit a bulk certificate generation job using JSON payload |
-| POST | `/api/v1/jobs/upload` | Submit a bulk certificate generation job via CSV upload |
-| GET | `/api/v1/jobs/{job_id}` | Get progress percentage, total/success/failed counts, and failure reasons |
-| GET | `/api/v1/jobs/{job_id}/certificates` | List all individual certificates for a job |
-| GET | `/api/v1/certificates/{certificate_id}` | Download a single generated PDF certificate |
-| GET | `/api/v1/jobs/{job_id}/download` | Download a ZIP file containing all successful PDFs for a job |
-| GET | `/api/v1/verify/{code}` | Verify authenticity of a certificate code |
+| POST | `/api/v1/jobs` | Submit a bulk job (JSON) |
+| POST | `/api/v1/jobs/upload` | Submit a bulk job (CSV upload) |
+| GET | `/api/v1/jobs/{job_id}` | Get job progress, counts, and failure reasons |
+| GET | `/api/v1/jobs/{job_id}/certificates` | List all certificates in a job |
+| GET | `/api/v1/certificates/{certificate_id}` | Download a single PDF |
+| GET | `/api/v1/jobs/{job_id}/download` | Download all successful PDFs as a ZIP |
+| GET | `/api/v1/verify/{code}` | Verify a certificate code |
+
+## Validation Rules
+
+Each recipient is validated individually before generation starts. Invalid recipients are saved with status `FAILED` and a message; they do not block valid ones.
+
+| Rule | Error message |
+| --- | --- |
+| Name is blank or whitespace-only | `Recipient name cannot be empty` |
+| Name longer than 255 characters | `Recipient name exceeds 255 characters` |
+| Email does not match `user@domain.tld` format | `Invalid email address format` |
+| Same email appears twice in the same job (case-insensitive) | `Duplicate email in this job` |
+| More than 1000 recipients per request (configurable via `MAX_RECIPIENTS_PER_JOB` in `config.py`) | Returns 422 with `Recipient count exceeds maximum allowed limit of 1000` |
+
+Structural problems — empty recipient list, missing `course_name` — return 422 and reject the entire request.
+
+## CSV Format
+
+The CSV upload endpoint expects a file with `name` and `email` columns:
+
+```csv
+name,email
+Alice Smith,alice@example.com
+Bob Jones,bob@example.com
+```
+
+Column names are matched case-insensitively and trimmed. `recipient_name` and `recipient_email` are also accepted.
 
 ## Submit a Generation Request
 
-### JSON Request Example
+### JSON
 
-Command:
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/jobs \
   -H "Content-Type: application/json" \
@@ -103,9 +127,8 @@ Response:
 {"job_id":"be42c79c-f378-4369-8e7d-a5338978011b","status":"PENDING","total":3}
 ```
 
-### CSV Upload Example
+### CSV Upload
 
-Command:
 ```bash
 curl -X POST http://127.0.0.1:8000/api/v1/jobs/upload \
   -F "course_name=Data Science 101" \
@@ -121,7 +144,6 @@ Response:
 
 ## Check Progress
 
-Command:
 ```bash
 curl http://127.0.0.1:8000/api/v1/jobs/be42c79c-f378-4369-8e7d-a5338978011b
 ```
@@ -148,24 +170,48 @@ Response:
 
 ## Retrieve Certificates
 
-### List Certificates in Job
+### List Certificates in a Job
+
 ```bash
-curl http://127.0.0.1:8000/api/v1/jobs/be42c79c-f378-4369-8e7d-a5338978011b/certificates
+curl http://127.0.0.1:8000/api/v1/jobs/{job_id}/certificates
 ```
 
-### Download Single PDF
-```bash
-curl -O -J http://127.0.0.1:8000/api/v1/certificates/9601c632-99f3-4dec-838a-fc67260d7fdd
+Response (truncated):
+```json
+[
+  {
+    "id": "0bc20e98-3979-4fc4-830c-ba23a260d324",
+    "name": "Student 1",
+    "email": "student1@example.com",
+    "status": "SUCCESS",
+    "error": null,
+    "code": "CERT-A0E9F6"
+  },
+  {
+    "id": "1146afd0-c949-45c5-81e3-91b9a8c13dab",
+    "name": "Student 2",
+    "email": "student2@example.com",
+    "status": "SUCCESS",
+    "error": null,
+    "code": "CERT-556A09"
+  }
+]
 ```
 
-### Download ZIP Archive
+### Download a Single PDF
+
 ```bash
-curl -o certificates.zip http://127.0.0.1:8000/api/v1/jobs/be42c79c-f378-4369-8e7d-a5338978011b/download
+curl -O -J http://127.0.0.1:8000/api/v1/certificates/{certificate_id}
+```
+
+### Download All as ZIP
+
+```bash
+curl -o certificates.zip http://127.0.0.1:8000/api/v1/jobs/{job_id}/download
 ```
 
 ## Verify a Certificate
 
-Command:
 ```bash
 curl http://127.0.0.1:8000/api/v1/verify/CERT-3BF813
 ```
@@ -184,51 +230,63 @@ Response:
 
 ## Design Decisions
 
-- **FastAPI BackgroundTasks**: Selected over Celery because it runs in-process without requiring external services like Redis or RabbitMQ. This keeps deployment simple for a single-server application. A message queue like Celery would be introduced if job processing needed multi-server distribution or persistent retry queues across server restarts.
-- **Per-Recipient Validation**: Rejection of an entire bulk request due to one bad recipient creates poor user experience. Each recipient is validated individually so valid certificates generate immediately, while invalid records are marked as FAILED with descriptive error messages.
-- **Disk Storage for PDFs**: Storing PDF files on disk and saving only the relative file path string in the database prevents database bloat and preserves query performance.
-- **SQLite Default & PostgreSQL Compatibility**: SQLite is used by default for zero-setup local development. Because SQLAlchemy 2.0 ORM is used exclusively, switching to PostgreSQL requires only updating the `DATABASE_URL` environment variable (for example, `export DATABASE_URL="postgresql://user:pass@localhost:5432/certs"`).
-- **Session Isolation & Live Progress**: The background function opens its own database session (`SessionLocal()`) and commits after processing each recipient. This allows polling clients to observe live progress while avoiding session thread-sharing issues.
-- **Failure Isolation**: PDF generation for each certificate occurs inside a dedicated `try/except` block. If drawing or file output fails for one entry, it is marked as FAILED, counts update, and processing continues for remaining recipients.
-- **Single Code-Defined Template**: Defined in `app/generator.py` with explicit layout constants, double decorative borders, and dynamic text font-size auto-shrinking to handle long recipient or course names without text clipping.
+- **Background processing with FastAPI BackgroundTasks, not Celery**: BackgroundTasks runs in-process with no external dependencies (no Redis, no worker processes). This keeps the project simple to run locally. I would switch to Celery or ARQ with Redis if the application needed persistent task queues, distributed workers, or guaranteed completion across server restarts.
+
+- **Per-recipient validation instead of rejecting the whole request**: When someone submits 500 recipients and one has a typo in the email, rejecting all 500 is a poor experience. Each recipient is validated independently so valid ones proceed. Only structural problems (empty list, missing course name) reject the entire request with 422.
+
+- **PDFs on disk, path in the database**: Storing binary files in a relational database bloats storage and slows queries. PDFs are saved to `./generated/<job_id>/<certificate_id>.pdf` and the database stores the absolute file path. File names come from server-generated UUIDs, never from user input.
+
+- **SQLite by default, PostgreSQL by changing one variable**: SQLite needs zero setup for development and testing. Since all database access goes through SQLAlchemy ORM, switching to PostgreSQL requires only setting `DATABASE_URL`:
+  ```bash
+  export DATABASE_URL="postgresql://user:pass@localhost:5432/certs"
+  ```
+
+- **One commit per certificate for live progress**: The background processor commits after each certificate so clients polling the status endpoint see counts update in real time instead of waiting for the entire batch.
+
+- **Failure isolation**: Each certificate is generated inside its own `try/except`. If ReportLab fails for one recipient, that certificate is marked FAILED with the error message, the job's failure counter increments, and the loop continues. If the entire processing function crashes unexpectedly, a top-level `except` marks the job as FAILED so it does not stay stuck in PROCESSING.
+
+- **Single code-defined template**: The certificate layout is defined once in `generator.py` with explicit constants for margins, colours, fonts, and y-positions. Long names auto-shrink to fit without clipping.
+
+- **Duplicate email detection**: Emails are lowercased and stripped before comparison. The first occurrence in a job is accepted; later duplicates are marked FAILED with a clear message.
 
 ## Known Limitations and Future Improvements
 
-- **In-Process Background Processing**: If the web server process restarts while a job is running, background tasks are interrupted. A persistent task queue like Celery or ARQ would fix this.
-- **Single Process Scaling**: Currently bounded by single-server disk and CPU resources. Storing PDFs in cloud storage (such as AWS S3) would enable multi-worker scaling.
-- **No Authentication**: API endpoints are unauthenticated. OAuth2 / JWT authentication should be added before production deployment.
-- **Retry Endpoint**: Failed certificates currently require re-submitting a new job. A retry endpoint (`POST /api/v1/jobs/{job_id}/retry`) could re-process failed rows.
-- **Direct Email Delivery**: Certificates are retrieved via download links. Adding SMTP integration would allow automatic email delivery to recipients upon completion.
+- **Jobs lost on restart**: Background tasks run in the server process. If it restarts mid-job, those tasks are lost. A persistent task queue (Celery, ARQ) would fix this.
+- **Single process**: Processing is single-threaded. For large batches, a worker pool or distributed task queue would help.
+- **No authentication**: All endpoints are open. JWT or OAuth2 should be added before production use.
+- **No retry endpoint**: Failed certificates require re-submitting the whole job. A `POST /api/v1/jobs/{job_id}/retry` endpoint could re-process only the failed rows.
+- **No email delivery**: Certificates are downloaded manually. SMTP integration could deliver them directly to recipients.
 
 ## Project Structure
 
 ```
 .
 ├── app/
-│   ├── __init__.py         # Package initialization
-│   ├── config.py           # Configuration values (DATABASE_URL, OUTPUT_DIR, limits)
-│   ├── database.py         # SQLAlchemy engine, session maker, and DB dependency
-│   ├── generator.py        # ReportLab PDF certificate template drawing logic
-│   ├── main.py             # FastAPI application initialization and route mounting
-│   ├── models.py           # SQLAlchemy 2.0 models for Job and Certificate
-│   ├── processor.py        # Background task processing loop with error isolation
-│   ├── routes.py           # API route definitions and endpoint handlers
-│   └── schemas.py          # Pydantic v2 validation and serialization schemas
+│   ├── __init__.py
+│   ├── config.py           - DATABASE_URL, OUTPUT_DIR, MAX_RECIPIENTS_PER_JOB
+│   ├── database.py         - SQLAlchemy engine, session factory, get_db dependency
+│   ├── generator.py        - ReportLab PDF template and drawing logic
+│   ├── main.py             - FastAPI app, table creation, static file mount
+│   ├── models.py           - Job and Certificate SQLAlchemy models, status enums
+│   ├── processor.py        - Background task loop with per-certificate error isolation
+│   ├── routes.py           - All API endpoints and recipient validation
+│   └── schemas.py          - Pydantic request/response schemas
 ├── static/
-│   └── index.html          # Vanilla HTML/JS frontend web application
+│   └── index.html          - Vanilla HTML/JS dashboard
 ├── tests/
-│   ├── conftest.py         # Test fixtures for isolated DB and output directory
-│   ├── test_failure_handling.py # Tests for generation exception handling
-│   ├── test_generation.py  # Tests for ReportLab PDF rendering
-│   ├── test_jobs.py        # Tests for JSON and CSV job creation endpoints
-│   ├── test_retrieval.py   # Tests for PDF download, ZIP download, and verification
-│   ├── test_status.py      # Tests for job status and progress polling
-│   └── test_validation.py  # Tests for structural and per-recipient validation
+│   ├── conftest.py         - Isolated temp DB and output dir fixtures
+│   ├── test_failure_handling.py
+│   ├── test_generation.py
+│   ├── test_jobs.py
+│   ├── test_retrieval.py
+│   ├── test_status.py
+│   └── test_validation.py
 ├── docs/
-│   ├── sample_certificate.pdf # Sample PDF certificate
-│   └── screenshot.png      # Screenshot of the web dashboard
-├── .env.example            # Sample environment variables configuration
-├── .gitignore              # Ignored files configuration
-├── pytest.ini              # Pytest configuration
-├── README.md               # Project documentation
-└── requirements.txt        # Pinned Python package dependencies
+│   ├── sample_certificate.pdf
+│   └── screenshot.png
+├── .env.example
+├── .gitignore
+├── pytest.ini
+├── README.md
+└── requirements.txt
+```
