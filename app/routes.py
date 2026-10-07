@@ -3,8 +3,9 @@ import io
 import re
 import uuid
 import zipfile
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import List, Set
+from typing import List, Optional, Set
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse, Response
 from sqlalchemy.orm import Session
@@ -30,9 +31,7 @@ EMAIL_REGEX = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 
 
 def is_valid_email(email: str) -> bool:
-    if not email or not isinstance(email, str):
-        return False
-    return bool(EMAIL_REGEX.match(email.strip().lower()))
+    return bool(email and isinstance(email, str) and EMAIL_REGEX.match(email))
 
 
 def generate_cert_code() -> str:
@@ -42,6 +41,88 @@ def generate_cert_code() -> str:
 def sanitize_filename(name: str) -> str:
     clean = re.sub(r"[^a-zA-Z0-9_-]", "_", name or "").strip("_")
     return clean if clean else "certificate"
+
+
+@dataclass
+class ValidatedRecipient:
+    """Holds the cleaned fields and any validation error for one recipient row."""
+    name: str
+    email: str
+    error: Optional[str] = None
+
+    @property
+    def is_valid(self) -> bool:
+        return self.error is None
+
+
+def validate_recipients(rows: List[RecipientInput]) -> List[ValidatedRecipient]:
+    """Validate each recipient row and return a list with per-row error or None.
+
+    Rules (applied in order):
+      1. Strip whitespace from name; lowercase and strip email.
+      2. Blank name  -> error.
+      3. Name > 255 chars -> error.
+      4. Invalid email format -> error.
+      5. Email already seen in this batch (case-insensitive) -> error; first wins.
+    """
+    seen_emails: Set[str] = set()
+    results: List[ValidatedRecipient] = []
+
+    for r in rows:
+        name = (r.name or "").strip()
+        email = (r.email or "").strip().lower()
+
+        if not name:
+            results.append(ValidatedRecipient(name=name, email=email, error="Recipient name cannot be empty"))
+        elif len(name) > 255:
+            results.append(ValidatedRecipient(name=name, email=email, error="Recipient name exceeds 255 characters"))
+        elif not is_valid_email(email):
+            results.append(ValidatedRecipient(name=name, email=email, error="Invalid email address format"))
+        elif email in seen_emails:
+            results.append(ValidatedRecipient(name=name, email=email, error="Duplicate email in this job"))
+        else:
+            seen_emails.add(email)
+            results.append(ValidatedRecipient(name=name, email=email))
+
+    return results
+
+
+def _build_job_and_certs(
+    job_id: str,
+    course_name: str,
+    completion_date: str,
+    issuer: str,
+    validated: List[ValidatedRecipient],
+    db: Session,
+) -> Job:
+    """Persist the Job row and all Certificate rows for a set of validated recipients."""
+    failure_count = sum(1 for v in validated if not v.is_valid)
+
+    job = Job(
+        id=job_id,
+        course_name=course_name,
+        completion_date=completion_date,
+        issuer=issuer,
+        status=JobStatus.PENDING.value,
+        total_count=len(validated),
+        success_count=0,
+        failure_count=failure_count,
+    )
+    db.add(job)
+
+    for v in validated:
+        cert = Certificate(
+            job_id=job_id,
+            recipient_name=v.name,
+            recipient_email=v.email,
+            code=generate_cert_code(),
+            status=CertStatus.FAILED.value if v.error else CertStatus.PENDING.value,
+            error_message=v.error,
+        )
+        db.add(cert)
+
+    db.commit()
+    return job
 
 
 @router.post("/jobs", status_code=status.HTTP_202_ACCEPTED, response_model=JobAcceptedResponse)
@@ -57,79 +138,15 @@ def create_job(
         )
 
     job_id = str(uuid.uuid4())
-    initial_failure_count = 0
-    seen_emails: Set[str] = set()
-
-    job = Job(
-        id=job_id,
+    validated = validate_recipients(payload.recipients)
+    job = _build_job_and_certs(
+        job_id=job_id,
         course_name=payload.course_name.strip(),
         completion_date=payload.completion_date.strip(),
         issuer=payload.issuer.strip(),
-        status=JobStatus.PENDING.value,
-        total_count=len(payload.recipients),
-        success_count=0,
-        failure_count=0,
+        validated=validated,
+        db=db,
     )
-    db.add(job)
-
-    for r in payload.recipients:
-        name = (r.name or "").strip()
-        email = (r.email or "").strip().lower()
-
-        if not name:
-            cert = Certificate(
-                job_id=job_id,
-                recipient_name=name,
-                recipient_email=email,
-                code=generate_cert_code(),
-                status=CertStatus.FAILED.value,
-                error_message="Recipient name cannot be empty",
-            )
-            initial_failure_count += 1
-        elif len(name) > 255:
-            cert = Certificate(
-                job_id=job_id,
-                recipient_name=name,
-                recipient_email=email,
-                code=generate_cert_code(),
-                status=CertStatus.FAILED.value,
-                error_message="Recipient name exceeds maximum allowed length of 255 characters",
-            )
-            initial_failure_count += 1
-        elif not is_valid_email(email):
-            cert = Certificate(
-                job_id=job_id,
-                recipient_name=name,
-                recipient_email=email,
-                code=generate_cert_code(),
-                status=CertStatus.FAILED.value,
-                error_message="Invalid email address format",
-            )
-            initial_failure_count += 1
-        elif email in seen_emails:
-            cert = Certificate(
-                job_id=job_id,
-                recipient_name=name,
-                recipient_email=email,
-                code=generate_cert_code(),
-                status=CertStatus.FAILED.value,
-                error_message="Duplicate email address in job",
-            )
-            initial_failure_count += 1
-        else:
-            seen_emails.add(email)
-            cert = Certificate(
-                job_id=job_id,
-                recipient_name=name,
-                recipient_email=email,
-                code=generate_cert_code(),
-                status=CertStatus.PENDING.value,
-            )
-
-        db.add(cert)
-
-    job.failure_count = initial_failure_count
-    db.commit()
 
     background_tasks.add_task(process_job, job_id)
 
@@ -166,7 +183,7 @@ async def upload_job_csv(
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Uploaded CSV file is empty")
 
     reader = csv.DictReader(io.StringIO(text))
-    recipients: List[RecipientInput] = []
+    rows: List[RecipientInput] = []
 
     if reader.fieldnames:
         for row in reader:
@@ -176,9 +193,9 @@ async def upload_job_csv(
             name = normalized.get("name") or normalized.get("recipient_name") or ""
             email = normalized.get("email") or normalized.get("recipient_email") or ""
             if name or email:
-                recipients.append(RecipientInput(name=name, email=email))
+                rows.append(RecipientInput(name=name, email=email))
 
-    if not recipients:
+    if not rows:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="CSV file must contain at least one valid recipient row",
@@ -188,9 +205,10 @@ async def upload_job_csv(
         course_name=course_name.strip(),
         completion_date=completion_date.strip(),
         issuer=issuer.strip(),
-        recipients=recipients,
+        recipients=rows,
     )
 
+    # Reuse create_job so both endpoints share the same validation path
     return create_job(job_payload, background_tasks, db)
 
 
@@ -200,10 +218,7 @@ def get_job_status(job_id: str, db: Session = Depends(get_db)):
     if not job:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found")
 
-    pending_count = job.total_count - (job.success_count + job.failure_count)
-    if pending_count < 0:
-        pending_count = 0
-
+    pending_count = max(job.total_count - (job.success_count + job.failure_count), 0)
     progress_percent = (
         round(((job.success_count + job.failure_count) / job.total_count) * 100.0, 2)
         if job.total_count > 0
@@ -279,12 +294,10 @@ def download_certificate_pdf(certificate_id: str, db: Session = Depends(get_db))
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Certificate PDF file not found on disk")
 
     safe_name = sanitize_filename(cert.recipient_name)
-    download_filename = f"{safe_name}-certificate.pdf"
-
     return FileResponse(
         path=str(file_path),
         media_type="application/pdf",
-        filename=download_filename,
+        filename=f"{safe_name}-certificate.pdf",
     )
 
 
@@ -315,11 +328,9 @@ def download_job_zip(job_id: str, db: Session = Depends(get_db)):
                     p = (OUTPUT_DIR / p).resolve()
                 else:
                     p = p.resolve()
-
                 if p.exists():
                     safe_name = sanitize_filename(c.recipient_name)
-                    filename_in_zip = f"{safe_name}_{c.code}.pdf"
-                    zf.write(p, arcname=filename_in_zip)
+                    zf.write(p, arcname=f"{safe_name}_{c.code}.pdf")
 
     zip_buffer.seek(0)
     return Response(
