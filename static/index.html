@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bulk Certificate Generator</title>
+  <style>
+    :root {
+      --bg: #f8fafc;
+      --card-bg: #ffffff;
+      --text: #0f172a;
+      --text-muted: #64748b;
+      --primary: #2563eb;
+      --primary-hover: #1d4ed8;
+      --success: #16a34a;
+      --danger: #dc2626;
+      --border: #e2e8f0;
+      --radius: 6px;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    body { background: var(--bg); color: var(--text); padding: 2rem 1rem; line-height: 1.5; }
+    .container { max-width: 900px; margin: 0 auto; }
+    header { margin-bottom: 2rem; text-align: center; }
+    header h1 { font-size: 1.8rem; color: #1e293b; margin-bottom: 0.5rem; }
+    header p { color: var(--text-muted); }
+    .card { background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.5rem; margin-bottom: 1.5rem; }
+    .grid-3 { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1rem; }
+    label { display: block; font-weight: 600; font-size: 0.85rem; margin-bottom: 0.35rem; }
+    input[type="text"], textarea, input[type="file"] {
+      width: 100%; padding: 0.55rem 0.75rem; border: 1px solid var(--border); border-radius: var(--radius); font-size: 0.95rem; outline: none;
+    }
+    textarea { resize: vertical; min-height: 120px; font-family: monospace; }
+    .tabs { display: flex; gap: 0.5rem; border-bottom: 1px solid var(--border); margin-bottom: 1rem; }
+    .tab-btn { background: none; border: none; padding: 0.5rem 1rem; font-weight: 600; cursor: pointer; color: var(--text-muted); border-bottom: 2px solid transparent; }
+    .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    button.btn-submit { background: var(--primary); color: white; border: none; padding: 0.7rem 1.2rem; font-weight: 600; border-radius: var(--radius); cursor: pointer; width: 100%; font-size: 0.95rem; }
+    button.btn-submit:hover { background: var(--primary-hover); }
+    .progress-bar-bg { background: #e2e8f0; height: 14px; border-radius: 7px; overflow: hidden; margin: 1rem 0; }
+    .progress-bar-fill { background: var(--primary); height: 100%; width: 0%; transition: width 0.3s ease; }
+    .stats-row { display: flex; justify-content: space-between; margin-bottom: 1rem; font-weight: 600; font-size: 0.85rem; }
+    .badge { padding: 0.2rem 0.4rem; border-radius: 4px; font-size: 0.75rem; font-weight: 700; }
+    .badge-success { background: #dcfce7; color: #15803d; }
+    .badge-failed { background: #fee2e2; color: #b91c1c; }
+    table { width: 100%; border-collapse: collapse; margin-top: 1rem; font-size: 0.85rem; }
+    th, td { text-align: left; padding: 0.55rem 0.75rem; border-bottom: 1px solid var(--border); }
+    th { background: #f1f5f9; color: var(--text-muted); font-weight: 600; }
+    .download-zip-btn { display: inline-block; background: var(--success); color: white; padding: 0.55rem 1.1rem; text-decoration: none; border-radius: var(--radius); font-weight: 600; font-size: 0.85rem; margin-top: 1rem; }
+    .verify-box { display: flex; gap: 0.5rem; }
+    .verify-result { margin-top: 1rem; padding: 0.75rem; border-radius: var(--radius); display: none; font-size: 0.9rem; }
+    .verify-result.valid { background: #dcfce7; border: 1px solid #86efac; color: #166534; }
+    .verify-result.invalid { background: #fee2e2; border: 1px solid #fca5a5; color: #991b1b; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>Bulk Certificate Generator</h1>
+      <p>Generate, download, and verify bulk PDF certificates asynchronously</p>
+    </header>
+
+    <div class="card">
+      <h2 style="font-size:1.1rem; margin-bottom:1rem;">1. Course Details</h2>
+      <div class="grid-3">
+        <div>
+          <label for="course_name">Course Name</label>
+          <input type="text" id="course_name" placeholder="Full-Stack Web Development" required>
+        </div>
+        <div>
+          <label for="completion_date">Completion Date</label>
+          <input type="text" id="completion_date" placeholder="October 2026" required>
+        </div>
+        <div>
+          <label for="issuer">Issuer Name</label>
+          <input type="text" id="issuer" placeholder="Tech Academy" required>
+        </div>
+      </div>
+
+      <div class="tabs">
+        <button type="button" class="tab-btn active" onclick="switchTab('paste', event)">Paste Recipients</button>
+        <button type="button" class="tab-btn" onclick="switchTab('upload', event)">Upload CSV</button>
+      </div>
+
+      <div id="tab-paste" class="tab-content active">
+        <label for="recipients_text">Recipients (one per line: Name, Email)</label>
+        <textarea id="recipients_text" placeholder="Alice Smith, alice@example.com&#10;Bob Jones, bob@example.com"></textarea>
+      </div>
+
+      <div id="tab-upload" class="tab-content">
+        <label for="csv_file">Upload CSV File (columns: name, email)</label>
+        <input type="file" id="csv_file" accept=".csv">
+      </div>
+      <br>
+      <button class="btn-submit" onclick="submitJob()">Submit Job</button>
+    </div>
+
+    <div id="status-card" class="card" style="display:none;">
+      <h2 style="font-size:1.1rem;">2. Processing Progress</h2>
+      <div id="status-header" style="margin-top:0.5rem; font-weight:600; font-size:0.9rem;">Status: PENDING</div>
+      
+      <div class="progress-bar-bg">
+        <div id="progress-bar" class="progress-bar-fill"></div>
+      </div>
+
+      <div class="stats-row">
+        <span>Total: <strong id="stat-total">0</strong></span>
+        <span>Successful: <strong id="stat-success" style="color:var(--success);">0</strong></span>
+        <span>Failed: <strong id="stat-failed" style="color:var(--danger);">0</strong></span>
+        <span>Pending: <strong id="stat-pending">0</strong></span>
+      </div>
+
+      <div id="zip-container" style="display:none;">
+        <a id="zip-link" href="#" class="download-zip-btn" download>Download All (ZIP)</a>
+      </div>
+
+      <div id="certificates-list-container" style="margin-top:1.5rem; display:none;">
+        <h3 style="font-size:1rem; margin-bottom:0.5rem;">Certificates</h3>
+        <table>
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Email</th>
+              <th>Status</th>
+              <th>Code / Error</th>
+              <th>Action</th>
+            </tr>
+          </thead>
+          <tbody id="cert-table-body"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 style="font-size:1.1rem;">3. Verify Certificate Code</h2>
+      <p style="color:var(--text-muted); font-size:0.85rem; margin-bottom:1rem;">Check authenticity of any certificate code</p>
+      <div class="verify-box">
+        <input type="text" id="verify_code" placeholder="CERT-7F3A9C" style="max-width:300px;">
+        <button type="button" class="tab-btn active" style="border:none; background:var(--primary); color:white; border-radius:var(--radius);" onclick="verifyCode()">Verify</button>
+      </div>
+      <div id="verify-result" class="verify-result"></div>
+    </div>
+
+  </div>
+
+  <script>
+    let activeTab = 'paste';
+    let pollInterval = null;
+
+    function switchTab(tab, evt) {
+      activeTab = tab;
+      document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(content => content.classList.remove('active'));
+      if (evt && evt.target) {
+        evt.target.classList.add('active');
+      }
+      document.getElementById('tab-' + tab).classList.add('active');
+    }
+
+    async function submitJob() {
+      const course_name = document.getElementById('course_name').value.trim();
+      const completion_date = document.getElementById('completion_date').value.trim();
+      const issuer = document.getElementById('issuer').value.trim();
+
+      if (!course_name || !completion_date || !issuer) {
+        alert('Please fill in Course Name, Completion Date, and Issuer Name.');
+        return;
+      }
+
+      let res, data;
+
+      if (activeTab === 'paste') {
+        const text = document.getElementById('recipients_text').value.trim();
+        if (!text) { alert('Please enter recipient details.'); return; }
+        
+        const lines = text.split('\n');
+        const recipients = lines.map(l => {
+          const parts = l.split(',');
+          return { name: (parts[0] || '').trim(), email: (parts[1] || '').trim() };
+        }).filter(r => r.name || r.email);
+
+        if (recipients.length === 0) { alert('Please enter at least one recipient.'); return; }
+
+        res = await fetch('/api/v1/jobs', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ course_name, completion_date, issuer, recipients })
+        });
+      } else {
+        const fileInput = document.getElementById('csv_file');
+        if (!fileInput.files || fileInput.files.length === 0) {
+          alert('Please select a CSV file to upload.');
+          return;
+        }
+
+        const formData = new FormData();
+        formData.append('course_name', course_name);
+        formData.append('completion_date', completion_date);
+        formData.append('issuer', issuer);
+        formData.append('file', fileInput.files[0]);
+
+        res = await fetch('/api/v1/jobs/upload', {
+          method: 'POST',
+          body: formData
+        });
+      }
+
+      data = await res.json();
+      if (!res.ok) {
+        alert('Error: ' + (data.detail || JSON.stringify(data)));
+        return;
+      }
+
+      startPolling(data.job_id);
+    }
+
+    function startPolling(jobId) {
+      document.getElementById('status-card').style.display = 'block';
+      if (pollInterval) clearInterval(pollInterval);
+      
+      pollInterval = setInterval(() => checkStatus(jobId), 1000);
+      checkStatus(jobId);
+    }
+
+    async function checkStatus(jobId) {
+      const res = await fetch(`/api/v1/jobs/${jobId}`);
+      if (!res.ok) return;
+
+      const job = await res.json();
+
+      document.getElementById('status-header').innerText = `Status: ${job.status}`;
+      document.getElementById('progress-bar').style.width = `${job.progress_percent}%`;
+      document.getElementById('stat-total').innerText = job.total;
+      document.getElementById('stat-success').innerText = job.successful;
+      document.getElementById('stat-failed').innerText = job.failed;
+      document.getElementById('stat-pending').innerText = job.pending;
+
+      if (['COMPLETED', 'COMPLETED_WITH_ERRORS', 'FAILED'].includes(job.status)) {
+        clearInterval(pollInterval);
+        loadCertificatesList(jobId);
+        
+        if (job.successful > 0) {
+          document.getElementById('zip-container').style.display = 'block';
+          document.getElementById('zip-link').href = `/api/v1/jobs/${jobId}/download`;
+        }
+      }
+    }
+
+    async function loadCertificatesList(jobId) {
+      const res = await fetch(`/api/v1/jobs/${jobId}/certificates`);
+      if (!res.ok) return;
+
+      const certs = await res.json();
+      const tbody = document.getElementById('cert-table-body');
+      tbody.innerHTML = '';
+
+      certs.forEach(c => {
+        const tr = document.createElement('tr');
+        const badgeClass = c.status === 'SUCCESS' ? 'badge-success' : 'badge-failed';
+        const actionHtml = c.status === 'SUCCESS' ? 
+          `<a href="/api/v1/certificates/${c.id}" download target="_blank" style="color:var(--primary);">Download PDF</a>` : '-';
+        
+        tr.innerHTML = `
+          <td>${escapeHtml(c.name || '')}</td>
+          <td>${escapeHtml(c.email || '')}</td>
+          <td><span class="badge ${badgeClass}">${c.status}</span></td>
+          <td>${c.status === 'SUCCESS' ? c.code : escapeHtml(c.error || '')}</td>
+          <td>${actionHtml}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+
+      document.getElementById('certificates-list-container').style.display = 'block';
+    }
+
+    async function verifyCode() {
+      const code = document.getElementById('verify_code').value.trim();
+      if (!code) return;
+
+      const res = await fetch(`/api/v1/verify/${code}`);
+      const data = await res.json();
+      const box = document.getElementById('verify-result');
+      
+      box.style.display = 'block';
+      if (data.valid) {
+        box.className = 'verify-result valid';
+        box.innerHTML = `
+          <strong>Valid Certificate</strong><br>
+          Recipient: ${escapeHtml(data.recipient_name)}<br>
+          Course: ${escapeHtml(data.course_name)}<br>
+          Date: ${escapeHtml(data.completion_date)}<br>
+          Issuer: ${escapeHtml(data.issuer)}
+        `;
+      } else {
+        box.className = 'verify-result invalid';
+        box.innerHTML = `<strong>Invalid Certificate Code</strong><br>No valid certificate found for code: ${escapeHtml(code)}`;
+      }
+    }
+
+    function escapeHtml(str) {
+      return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+    }
+  </script>
+</body>
+</html>
